@@ -1,125 +1,176 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
-const crypto = require("crypto");
 const path = require("path");
-const { Pool } = require("pg");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: { origin: "*" },
+  transports: ["polling", "websocket"]
+});
+
 const PORT = process.env.PORT || 3000;
-const appName = "9Ч — Голос класса";
-const choices = ["За изменения в классе", "Пока всё оставить как есть"];
-const useDb = Boolean(process.env.DATABASE_URL);
-let pool;
-let memoryVotes = new Map();
 
-if (useDb) {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL.includes("localhost")
-      ? false : { rejectUnauthorized: false }
-  });
-}
+// Опции голосования (нейтральные формулировки)
+const CHOICES = [
+  "За предложенные нововведения в классе",
+  "Сохранить текущий формат без изменений"
+];
 
-app.use(express.json({ limit: "10kb" }));
+// Хранилище в оперативной памяти сервера (сбрасывается при перезапуске)
+// Ключ: анонимный voterId (UUID/хэш браузера), Значение: индекс выбора (0 или 1)
+const votesStore = new Map();
+
+app.use(express.json({ limit: "20kb" }));
+
+// Раздача статики из папки public
 app.use(express.static(path.join(__dirname, "public")));
 
-function voterId(req) {
-  // Anonymous browser identifier; never collect names or email addresses.
-  const raw = req.get("x-voter-id") || "";
-  if (!/^[a-f0-9-]{20,80}$/i.test(raw)) return null;
-  return raw;
-}
+// Поддержка корневого файла index.html как резерв
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
-async function initDb() {
-  if (!useDb) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS poll_votes (
-      voter_id VARCHAR(80) PRIMARY KEY,
-      choice SMALLINT NOT NULL CHECK (choice IN (0,1)),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-}
-
-async function getResults() {
-  if (useDb) {
-    const result = await pool.query(
-      "SELECT choice, COUNT(*)::int AS count FROM poll_votes GROUP BY choice"
-    );
-    const counts = [0, 0];
-    let total = 0;
-    for (const row of result.rows) {
-      counts[row.choice] = row.count;
-      total += row.count;
-    }
-    return { total, counts };
+// Проверка и нормализация анонимного идентификатора браузера
+function getVoterId(req) {
+  const headerId = req.get("x-voter-id") || (req.body && req.body.voterId) || "";
+  const cleaned = String(headerId).trim();
+  if (/^[a-zA-Z0-9_-]{16,128}$/.test(cleaned)) {
+    return cleaned;
   }
+  return null;
+}
+
+// Расчёт сводки результатов
+function getPollResults() {
   const counts = [0, 0];
-  for (const vote of memoryVotes.values()) counts[vote] += 1;
-  return { total: memoryVotes.size, counts };
+  for (const choice of votesStore.values()) {
+    if (choice === 0 || choice === 1) {
+      counts[choice] += 1;
+    }
+  }
+  const total = votesStore.size;
+  const percentages = counts.map((count) =>
+    total > 0 ? Math.round((count / total) * 100) : 0
+  );
+
+  return {
+    choices: CHOICES,
+    counts,
+    percentages,
+    total
+  };
 }
 
-app.get("/api/results", async (_req, res) => {
-  try { res.json(await getResults()); }
-  catch (err) {
-    console.error("Results error:", err.message);
-    res.status(500).json({ error: "Не удалось загрузить результаты" });
-  }
-});
-
-app.post("/api/vote", async (req, res) => {
-  const id = voterId(req);
-  const choice = Number(req.body && req.body.choice);
-  if (!id) return res.status(400).json({ error: "Обнови страницу и попробуй снова." });
-  if (![0, 1].includes(choice)) return res.status(400).json({ error: "Выбери один из вариантов." });
-
+// API: Получение текущих результатов
+app.get("/api/results", (_req, res) => {
   try {
-    if (useDb) {
-      const inserted = await pool.query(
-        "INSERT INTO poll_votes (voter_id, choice) VALUES ($1, $2) ON CONFLICT (voter_id) DO NOTHING RETURNING voter_id",
-        [id, choice]
-      );
-      if (!inserted.rowCount) {
-        return res.status(409).json({ error: "С этого браузера голос уже отправлен." });
-      }
-    } else {
-      if (memoryVotes.has(id)) {
-        return res.status(409).json({ error: "С этого браузера голос уже отправлен." });
-      }
-      memoryVotes.set(id, choice);
-    }
-    const results = await getResults();
-    io.emit("results", results);
-    res.json({ ok: true, results });
+    res.json({
+      success: true,
+      results: getPollResults()
+    });
   } catch (err) {
-    console.error("Vote error:", err.message);
-    res.status(500).json({ error: "Не получилось сохранить голос. Попробуй позже." });
+    console.error("Ошибка при получении результатов:", err);
+    res.status(500).json({ success: false, error: "Не удалось получить результаты" });
   }
 });
 
-io.on("connection", async (socket) => {
-  socket.emit("presence", { online: io.engine.clientsCount });
-  socket.broadcast.emit("presence", { online: io.engine.clientsCount });
-  try { socket.emit("results", await getResults()); } catch {}
+// API: Проверка статуса голоса конкретного клиента
+app.get("/api/check-status", (req, res) => {
+  const voterId = getVoterId(req);
+  if (!voterId) {
+    return res.status(400).json({ success: false, error: "Некорректный идентификатор" });
+  }
+  const hasVoted = votesStore.has(voterId);
+  const choice = hasVoted ? votesStore.get(voterId) : null;
+  res.json({
+    success: true,
+    hasVoted,
+    choice,
+    results: getPollResults()
+  });
+});
+
+// API: Отправка голоса
+app.post("/api/vote", (req, res) => {
+  const voterId = getVoterId(req);
+  const choice = Number(req.body && req.body.choice);
+
+  if (!voterId) {
+    return res.status(400).json({
+      success: false,
+      error: "Не удалось идентифицировать сессию. Обновите страницу."
+    });
+  }
+
+  if (![0, 1].includes(choice)) {
+    return res.status(400).json({
+      success: false,
+      error: "Неверный вариант ответа. Выберите один из пунктов."
+    });
+  }
+
+  // Защита от повторного голосования
+  if (votesStore.has(voterId)) {
+    return res.status(409).json({
+      success: false,
+      alreadyVoted: true,
+      choice: votesStore.get(voterId),
+      error: "С этого браузера голос уже был зарегистрирован.",
+      results: getPollResults()
+    });
+  }
+
+  // Фиксация голоса в памяти сервера
+  votesStore.set(voterId, choice);
+  const updatedResults = getPollResults();
+
+  // Мгновенная рассылка обновлений всем подключённым клиентам через WebSocket
+  io.emit("results_update", updatedResults);
+
+  return res.json({
+    success: true,
+    choice,
+    results: updatedResults
+  });
+});
+
+// Управление сокет-соединениями
+io.on("connection", (socket) => {
+  // Отправляем текущее количество участников в реальном времени
+  const updateOnline = () => {
+    io.emit("online_count", { online: io.engine.clientsCount });
+  };
+
+  updateOnline();
+
+  // Отправляем свежие результаты новому подключению
+  socket.emit("results_update", getPollResults());
+
   socket.on("disconnect", () => {
-    io.emit("presence", { online: io.engine.clientsCount });
+    updateOnline();
+  });
+
+  socket.on("error", (err) => {
+    console.warn("Socket error:", err?.message || err);
   });
 });
 
-initDb().then(() => {
-  server.listen(PORT, () => {
-    console.log(`${appName} listening on ${PORT}`);
-    console.log(useDb ? "Persistence: PostgreSQL" : "Persistence: temporary memory (votes reset on restart)");
+// Graceful shutdown
+function shutdown() {
+  console.log("Остановка сервера...");
+  server.close(() => {
+    console.log("Сервер остановлен.");
+    process.exit(0);
   });
-}).catch((err) => {
-  console.error("Database initialization failed:", err.message);
-  process.exit(1);
-});
+}
 
-process.on("SIGTERM", async () => {
-  if (pool) await pool.end().catch(() => {});
-  server.close(() => process.exit(0));
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+// Запуск прослушивания порта (0.0.0.0 для облачных сред Render/Koyeb/Railway)
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`[9Ч Голосование] Сервер успешно запущен на порту ${PORT}`);
+  console.log(`[9Ч Голосование] Хранилище: in-memory (сброс при перезапуске сервера)`);
 });

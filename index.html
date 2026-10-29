@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Петиция: Поменять учителя?</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <main class="container">
+    <section class="petition-card">
+      <!-- Верхняя панель статуса -->
+      <div class="card-header">
+        <div class="badge-live">
+          <span class="pulse-dot"></span>
+          <span>LIVE ГОЛОСОВАНИЕ</span>
+        </div>
+        <div class="online-pill" title="Сейчас на сайте">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          <span id="onlineCount">1</span> онлайн
+        </div>
+      </div>
+
+      <!-- Фото и заголовок -->
+      <div class="profile-section">
+        <div class="avatar-wrapper">
+          <img src="kamila.png" alt="Учитель" id="teacherImg" class="avatar-img">
+          <div class="avatar-badge">⚡ ПЕТИЦИЯ</div>
+        </div>
+        <h1 class="petition-title">Поменять учителя?</h1>
+        <p class="petition-subtitle">
+          Анонимное открытое голосование в реальном времени. Каждый голос мгновенно отображается у всех участников.
+        </p>
+      </div>
+
+      <!-- Блок статистики и прогресс-бара -->
+      <div class="stats-box">
+        <div class="stats-top">
+          <div class="stat-item yes-stat">
+            <span class="stat-label">ЗА (ДА)</span>
+            <span class="stat-numbers"><strong id="yesCount">0</strong> (<span id="yesPercent">50%</span>)</span>
+          </div>
+          <div class="total-counter">
+            Всего голосов: <strong id="totalVotes">0</strong>
+          </div>
+          <div class="stat-item no-stat">
+            <span class="stat-label">ПРОТИВ (НЕТ)</span>
+            <span class="stat-numbers"><strong id="noCount">0</strong> (<span id="noPercent">50%</span>)</span>
+          </div>
+        </div>
+
+        <div class="progress-track">
+          <div class="progress-fill-yes" id="barYes" style="width: 50%;"></div>
+          <div class="progress-fill-no" id="barNo" style="width: 50%;"></div>
+        </div>
+      </div>
+
+      <!-- Кнопки голосования -->
+      <div class="buttons-grid">
+        <button class="vote-btn btn-yes" id="btnYes" onclick="sendVote('yes')">
+          <span class="btn-emoji">👍</span>
+          <div class="btn-text-group">
+            <span class="btn-main-text">ДА, ПОМЕНЯТЬ</span>
+            <span class="btn-sub-text">Поддерживаю петицию</span>
+          </div>
+          <span class="btn-badge" id="btnYesBadge">0</span>
+        </button>
+
+        <button class="vote-btn btn-no" id="btnNo" onclick="sendVote('no')">
+          <span class="btn-emoji">👎</span>
+          <div class="btn-text-group">
+            <span class="btn-main-text">НЕТ, ОСТАВИТЬ</span>
+            <span class="btn-sub-text">Не поддерживаю</span>
+          </div>
+          <span class="btn-badge" id="btnNoBadge">0</span>
+        </button>
+      </div>
+
+      <p class="user-status" id="userVoteStatus">Нажмите на кнопку выше, чтобы отдать свой голос</p>
+
+      <!-- Живая лента активности -->
+      <div class="activity-section">
+        <div class="activity-title">Последние действия в реальном времени:</div>
+        <ul class="activity-list" id="activityList">
+          <li class="activity-empty">Пока никто не проголосовал. Будьте первым!</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
